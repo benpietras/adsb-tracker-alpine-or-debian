@@ -26,7 +26,7 @@ A self-hosted ADS-B flight tracker using an RTL-SDR dongle, dump1090, and a live
 ## Installation
 
 ```sh
-git clone https://github.com/yourusername/adsb-tracker.git
+git clone https://github.com/benpietras/adsb-tracker.git
 cd adsb-tracker
 chmod +x install.sh
 
