@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>ADS-B Tracker — South Reddish</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #111; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  #header { padding: 10px 16px; background: #fff; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  #header h1 { font-size: 15px; font-weight: 500; }
+  #status { font-size: 12px; color: #666; display: flex; align-items: center; gap: 8px; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: #ccc; flex-shrink: 0; }
+  #dot.live { background: #22c55e; animation: pulse 1.5s infinite; }
+  #dot.error { background: #ef4444; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  #main { display: flex; flex: 1; overflow: hidden; }
+  #map { flex: 1; }
+  #sidebar { width: 300px; flex-shrink: 0; background: #fff; border-left: 1px solid #e5e5e5; display: flex; flex-direction: column; overflow: hidden; }
+  #sidebar-header { padding: 10px 14px; font-size: 11px; font-weight: 600; color: #888; border-bottom: 1px solid #e5e5e5; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.05em; }
+  #plane-list { flex: 1; overflow-y: auto; }
+  .plane-card { padding: 10px 14px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.1s; }
+  .plane-card:hover { background: #f9f9f9; }
+  .plane-card.selected { background: #eff6ff; }
+  .plane-callsign { font-size: 14px; font-weight: 600; }
+  .plane-hex { font-size: 11px; color: #999; font-family: monospace; }
+  .plane-route { font-size: 12px; color: #2563eb; margin-top: 3px; }
+  .plane-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-top: 6px; }
+  .stat { font-size: 11px; color: #888; }
+  .stat span { color: #111; font-weight: 500; }
+  #detail { position: absolute; bottom: 0; right: 300px; width: 340px; background: #fff; border: 1px solid #e5e5e5; border-radius: 10px 0 0 0; box-shadow: -2px -2px 12px rgba(0,0,0,0.08); display: none; flex-direction: column; max-height: 70vh; overflow-y: auto; z-index: 1000; }
+  #detail.visible { display: flex; }
+  #detail-photo { width: 100%; height: 160px; object-fit: cover; border-radius: 10px 0 0 0; background: #f0f0f0; display: none; }
+  #detail-photo.loaded { display: block; }
+  #detail-photo-placeholder { width: 100%; height: 80px; background: linear-gradient(135deg, #e0e7ff, #f0f4ff); display: flex; align-items: center; justify-content: center; font-size: 32px; border-radius: 10px 0 0 0; }
+  #detail-body { padding: 14px; }
+  #detail-callsign { font-size: 18px; font-weight: 700; margin-bottom: 2px; }
+  #detail-airline { font-size: 13px; color: #666; margin-bottom: 10px; }
+  #detail-route-box { background: #f0f7ff; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; display: none; }
+  #detail-route-box.visible { display: block; }
+  .route-line { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .route-airport { font-weight: 600; font-size: 15px; }
+  .route-name { font-size: 11px; color: #666; margin-top: 1px; }
+  .route-arrow { color: #2563eb; font-size: 18px; flex-shrink: 0; }
+  #detail-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .detail-stat { background: #f8f8f8; border-radius: 6px; padding: 8px 10px; }
+  .detail-stat-label { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.05em; }
+  .detail-stat-value { font-size: 15px; font-weight: 600; margin-top: 2px; }
+  #detail-close { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 50%; background: rgba(0,0,0,0.2); border: none; cursor: pointer; color: white; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+  #detail-close:hover { background: rgba(0,0,0,0.4); }
+  #no-aircraft { padding: 24px 14px; text-align: center; color: #aaa; font-size: 13px; line-height: 1.6; }
+  .vert-up { color: #16a34a; }
+  .vert-down { color: #dc2626; }
+  #detail-photo-credit { font-size: 10px; color: #aaa; text-align: right; padding: 2px 8px 6px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <h1>✈ ADS-B Tracker — South Reddish, Stockport</h1>
+    <div id="status"><div id="dot"></div><span id="status-text">Connecting...</span></div>
+  </div>
+  <div id="main">
+    <div id="map"></div>
+    <div id="sidebar">
+      <div id="sidebar-header">Aircraft <span id="count">(0)</span></div>
+      <div id="plane-list"><div id="no-aircraft">Waiting for aircraft...<br/>Make sure dump1090 is running.</div></div>
+    </div>
+  </div>
+</div>
+<div id="detail">
+  <button id="detail-close" onclick="closeDetail()">✕</button>
+  <div id="detail-photo-placeholder">✈</div>
+  <img id="detail-photo" alt="Aircraft photo"/>
+  <div id="detail-photo-credit"></div>
+  <div id="detail-body">
+    <div id="detail-callsign">—</div>
+    <div id="detail-airline"></div>
+    <div id="detail-route-box">
+      <div class="route-line">
+        <div>
+          <div class="route-airport" id="route-origin-iata">—</div>
+          <div class="route-name" id="route-origin-name"></div>
+        </div>
+        <div class="route-arrow">→</div>
+        <div>
+          <div class="route-airport" id="route-dest-iata">—</div>
+          <div class="route-name" id="route-dest-name"></div>
+        </div>
+      </div>
+    </div>
+    <div id="detail-rows"></div>
+  </div>
+</div>
+<script>
+const HOME = { lat: 53.4331, lng: -2.1559 };
+const JSON_URL = '/aircraft.json';
+let map, markers = {}, aircraft = {}, routeCache = {}, photoCache = {}, selectedHex = null;
+
+map = L.map('map').setView([HOME.lat, HOME.lng], 9);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 18
+}).addTo(map);
+
+[50, 100, 150, 200].forEach(nm => {
+  L.circle([HOME.lat, HOME.lng], {
+    radius: nm * 1852, color: '#94a3b8', weight: 0.5, fillOpacity: 0, dashArray: '4 4'
+  }).addTo(map).bindTooltip(nm + 'nm', { permanent: false });
+});
+
+L.circle([HOME.lat, HOME.lng], { radius: 3000, color: '#2563eb', weight: 1.5, fillColor: '#2563eb', fillOpacity: 0.1 }).addTo(map);
+L.marker([HOME.lat, HOME.lng], {
+  icon: L.divIcon({ html: '<div style="width:10px;height:10px;border-radius:50%;background:#2563eb;border:2px solid white;margin:-5px 0 0 -5px"></div>', iconSize: [0,0] })
+}).addTo(map).bindPopup('South Reddish');
+
+function planeIcon(hdg, selected, altitude) {
+  let color = selected ? '#dc2626' : !altitude || altitude < 5000 ? '#7c3aed' : altitude < 15000 ? '#0891b2' : '#1d4ed8';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><g transform="rotate(${hdg||0} 14 14)"><polygon points="14,2 18,24 14,21 10,24" fill="${color}" stroke="white" stroke-width="1.5"/></g></svg>`;
+  return L.divIcon({ html: svg, iconSize: [28,28], iconAnchor: [14,14], className: '' });
+}
+
+async function fetchRoute(callsign) {
+  const cs = callsign.trim();
+  if (routeCache[cs] !== undefined) return routeCache[cs];
+  routeCache[cs] = null;
+  try {
+    const r = await fetch(`https://api.adsbdb.com/v0/callsign/${cs}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const route = d?.response?.flightroute;
+    if (route) routeCache[cs] = {
+      originIata: route.origin?.iata_code||'?', originName: route.origin?.municipality||route.origin?.name||'',
+      destIata: route.destination?.iata_code||'?', destName: route.destination?.municipality||route.destination?.name||'',
+      airline: route.airline?.name||'', aircraftType: route.aircraft_type||''
+    };
+  } catch(e) {}
+  return routeCache[cs];
+}
+
+async function fetchPhoto(hex) {
+  if (photoCache[hex] !== undefined) return photoCache[hex];
+  photoCache[hex] = null;
+  try {
+    const r = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const p = d?.photos?.[0];
+    if (p) photoCache[hex] = { url: p.thumbnail_large?.src||p.thumbnail?.src, photographer: p.photographer };
+  } catch(e) {}
+  return photoCache[hex];
+}
+
+function fmtAlt(a) { return a!=null ? Number(a).toLocaleString()+' ft' : '—'; }
+function fmtSpd(s) { return s!=null ? Math.round(s)+' kt' : '—'; }
+function fmtVert(v) {
+  if (v==null) return '—';
+  const cls = v>0?'vert-up':v<0?'vert-down':'';
+  const arr = v>0?'▲':v<0?'▼':'→';
+  return `<span class="${cls}">${arr} ${Math.abs(Math.round(v))} fpm</span>`;
+}
+
+function updateSidebar() {
+  const arr = Object.values(aircraft).filter(a => a.lat && a.lon);
+  document.getElementById('count').textContent = `(${arr.length})`;
+  if (!arr.length) { document.getElementById('plane-list').innerHTML = '<div id="no-aircraft">No aircraft with position yet.</div>'; return; }
+  arr.sort((a,b) => (b.messages||0)-(a.messages||0));
+  document.getElementById('plane-list').innerHTML = arr.map(a => {
+    const route = routeCache[a.flight?.trim()];
+    return `<div class="plane-card${a.hex===selectedHex?' selected':''}" onclick="selectPlane('${a.hex}')">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span class="plane-callsign">${a.flight?.trim()||'—'}</span>
+        <span class="plane-hex">${a.hex?.toUpperCase()}</span>
+      </div>
+      ${route?`<div class="plane-route">${route.originIata} → ${route.destIata}${route.airline?' · '+route.airline:''}</div>`:''}
+      <div class="plane-stats">
+        <div class="stat">Alt <span>${fmtAlt(a.altitude)}</span></div>
+        <div class="stat">Spd <span>${fmtSpd(a.speed)}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function showDetail(hex) {
+  const a = aircraft[hex];
+  if (!a) return;
+  document.getElementById('detail').classList.add('visible');
+  document.getElementById('detail-callsign').textContent = a.flight?.trim()||a.hex?.toUpperCase();
+  document.getElementById('detail-airline').textContent = '';
+  document.getElementById('detail-route-box').classList.remove('visible');
+  document.getElementById('detail-photo').classList.remove('loaded');
+  document.getElementById('detail-photo-placeholder').style.display = 'flex';
+  document.getElementById('detail-photo-credit').textContent = '';
+  document.getElementById('detail-rows').innerHTML = [
+    ['Altitude', fmtAlt(a.altitude)], ['Speed', fmtSpd(a.speed)],
+    ['Heading', a.track!=null?Math.round(a.track)+'°':'—'], ['Vert rate', fmtVert(a.vert_rate), true],
+    ['Squawk', a.squawk||'—'], ['ICAO', a.hex?.toUpperCase()],
+    ['Messages', (a.messages||0).toLocaleString()], ['RSSI', a.rssi!=null?a.rssi.toFixed(1)+' dB':'—']
+  ].map(([l,v,h]) => `<div class="detail-stat"><div class="detail-stat-label">${l}</div><div class="detail-stat-value">${v}</div></div>`).join('');
+
+  const cs = a.flight?.trim();
+  if (cs) {
+    const route = routeCache[cs]!==undefined ? routeCache[cs] : await fetchRoute(cs);
+    if (route) {
+      document.getElementById('detail-airline').textContent = route.airline+(route.aircraftType?' · '+route.aircraftType:'');
+      document.getElementById('route-origin-iata').textContent = route.originIata;
+      document.getElementById('route-origin-name').textContent = route.originName;
+      document.getElementById('route-dest-iata').textContent = route.destIata;
+      document.getElementById('route-dest-name').textContent = route.destName;
+      document.getElementById('detail-route-box').classList.add('visible');
+      updateSidebar();
+    }
+  }
+  const photo = photoCache[hex]!==undefined ? photoCache[hex] : await fetchPhoto(hex);
+  if (photo?.url) {
+    const img = document.getElementById('detail-photo');
+    img.onload = () => { document.getElementById('detail-photo-placeholder').style.display='none'; img.classList.add('loaded'); };
+    img.src = photo.url;
+    if (photo.photographer) document.getElementById('detail-photo-credit').textContent = '📷 '+photo.photographer;
+  }
+}
+
+function closeDetail() {
+  document.getElementById('detail').classList.remove('visible');
+  selectedHex = null;
+  Object.entries(markers).forEach(([h,m]) => m.setIcon(planeIcon(aircraft[h]?.track, false, aircraft[h]?.altitude||0)));
+  updateSidebar();
+}
+
+function selectPlane(hex) {
+  selectedHex = hex;
+  const a = aircraft[hex];
+  if (a?.lat && a?.lon) map.panTo([a.lat, a.lon]);
+  Object.entries(markers).forEach(([h,m]) => m.setIcon(planeIcon(aircraft[h]?.track, h===hex, aircraft[h]?.altitude||0)));
+  showDetail(hex);
+  updateSidebar();
+}
+
+async function poll() {
+  try {
+    const r = await fetch(JSON_URL+'?_='+Date.now(), { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    document.getElementById('dot').className = 'live';
+    document.getElementById('status-text').textContent = `Live — ${new Date().toLocaleTimeString()} — ${(d.messages||0).toLocaleString()} msgs`;
+    const seen = new Set();
+    for (const a of (d.aircraft||[])) {
+      if (!a.hex) continue;
+      seen.add(a.hex);
+      aircraft[a.hex] = { ...aircraft[a.hex], ...a };
+      if (a.lat && a.lon) {
+        if (markers[a.hex]) {
+          markers[a.hex].setLatLng([a.lat, a.lon]);
+          markers[a.hex].setIcon(planeIcon(a.track, a.hex===selectedHex, a.altitude||0));
+        } else {
+          markers[a.hex] = L.marker([a.lat, a.lon], { icon: planeIcon(a.track, false, a.altitude||0) })
+            .addTo(map).on('click', () => selectPlane(a.hex));
+        }
+        markers[a.hex].bindTooltip(a.flight?.trim()||a.hex?.toUpperCase(), { permanent: false, direction: 'top', offset: [0,-14] });
+      }
+      if (a.flight?.trim() && routeCache[a.flight.trim()]===undefined) {
+        fetchRoute(a.flight.trim()).then(() => { if (a.hex===selectedHex) showDetail(a.hex); updateSidebar(); });
+      }
+    }
+    for (const hex of Object.keys(markers)) {
+      if (!seen.has(hex)) { map.removeLayer(markers[hex]); delete markers[hex]; delete aircraft[hex]; }
+    }
+    if (selectedHex && aircraft[selectedHex]) {
+      const a = aircraft[selectedHex];
+      const els = document.querySelectorAll('#detail-rows .detail-stat-value');
+      if (els[0]) els[0].textContent = fmtAlt(a.altitude);
+      if (els[1]) els[1].textContent = fmtSpd(a.speed);
+      if (els[2]) els[2].textContent = a.track!=null?Math.round(a.track)+'°':'—';
+      if (els[3]) els[3].innerHTML = fmtVert(a.vert_rate);
+    }
+    updateSidebar();
+  } catch(e) {
+    document.getElementById('dot').className = 'error';
+    document.getElementById('status-text').textContent = 'Cannot reach dump1090 JSON';
+  }
+}
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>
