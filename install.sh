@@ -21,6 +21,12 @@ section() { printf "\n${YELLOW}━━━ %s ━━━${NC}\n" "$*"; }
 
 # ── Detect OS ────────────────────────────────────────────────────────────────
 detect_os() {
+
+if grep -qi raspberry /proc/cpuinfo 2>/dev/null || grep -qi raspberry /etc/os-release 2>/dev/null; then
+    info "Detected Raspberry Pi"
+    IS_PI=1
+fi
+
     if [ -f /etc/alpine-release ]; then
         OS="alpine"
         SUDO="doas"
@@ -70,21 +76,70 @@ EOF
 }
 
 # ── Install packages ─────────────────────────────────────────────────────────
+install_dump1090_from_source() {
+    info "Building dump1090-fa from source"
+    $SUDO $PKG_INSTALL git build-essential debhelper librtlsdr-dev pkg-config \
+        libncurses-dev
+    [ -d "$HOME/git/dump1090" ] || git clone https://github.com/flightaware/dump1090.git "$HOME/git/dump1090"
+    cd "$HOME/git/dump1090"
+    make BLADERF=no HACKRF=no LIMESDR=no
+    $SUDO install -m 0755 dump1090 /usr/bin/dump1090
+    info "dump1090 built and installed from source"
+    cd -
+}
+
+install_dump1090_debian() {
+    pkg_available() {
+        apt-cache policy "$1" 2>/dev/null | grep -q "Candidate:" && \
+        ! apt-cache policy "$1" 2>/dev/null | grep -q "Candidate: (none)"
+    }
+
+    if pkg_available dump1090-fa; then
+        info "Installing dump1090-fa from apt"
+        $SUDO $PKG_INSTALL dump1090-fa
+    elif pkg_available dump1090-mutability; then
+        info "Installing dump1090-mutability from apt"
+        $SUDO $PKG_INSTALL dump1090-mutability
+    else
+        info "No dump1090 in apt — adding FlightAware repo"
+        CODENAME=$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2)
+        ARCH=$(dpkg --print-architecture)
+        info "Detected: $CODENAME / $ARCH"
+        FA_REPO_URL="https://www.flightaware.com/adsb/piaware/files/packages/pool/piaware/p/piaware-support/piaware-repository_10.0_all.deb"
+        curl -L -o /tmp/piaware-repo.deb "$FA_REPO_URL"
+        if dpkg-deb -I /tmp/piaware-repo.deb >/dev/null 2>&1; then
+            $SUDO dpkg -i /tmp/piaware-repo.deb
+            $SUDO $PKG_UPDATE
+            if pkg_available dump1090-fa; then
+                $SUDO $PKG_INSTALL dump1090-fa
+            else
+                warn "FlightAware repo doesn't support $CODENAME/$ARCH — building from source"
+                install_dump1090_from_source
+            fi
+        else
+            warn "FlightAware repo deb invalid — building from source"
+            install_dump1090_from_source
+        fi
+    fi
+}
+
 install_packages_debian() {
     section "Installing packages (Debian)"
     $SUDO $PKG_UPDATE
-    $SUDO $PKG_INSTALL rtl-sdr dump1090-mutability python3 curl
+    $SUDO $PKG_INSTALL rtl-sdr python3 curl
 
-    # Ensure dump1090 runs as current user and has HTTP port set
-    USER_NAME=$(whoami)
-    $SUDO sed -i "s/DUMP1090_USER=\"dump1090\"/DUMP1090_USER=\"$USER_NAME\"/" /etc/default/dump1090-mutability
-    # Set JSON dir and extra args
-    $SUDO sed -i 's|JSON_DIR=.*|JSON_DIR="/run/dump1090-mutability"|' /etc/default/dump1090-mutability
-    $SUDO sed -i 's|EXTRA_ARGS=""|EXTRA_ARGS="--net-http-port 8889"|' /etc/default/dump1090-mutability 2>/dev/null || true
-    # Set location
-    $SUDO sed -i 's|LAT=""|LAT="53.4331"|' /etc/default/dump1090-mutability
-    $SUDO sed -i 's|LON=""|LON="-2.1559"|' /etc/default/dump1090-mutability
-    JSON_DIR="/run/dump1090-mutability"
+    install_dump1090_debian
+
+    # Configure dump1090 if mutability config exists
+    if [ -f /etc/default/dump1090-mutability ]; then
+        USER_NAME=$(whoami)
+        $SUDO sed -i "s/DUMP1090_USER=\"dump1090\"/DUMP1090_USER=\"$USER_NAME\"/" /etc/default/dump1090-mutability
+        $SUDO sed -i 's|JSON_DIR=.*|JSON_DIR="/run/dump1090-mutability"|' /etc/default/dump1090-mutability
+        $SUDO sed -i 's|EXTRA_ARGS=""|EXTRA_ARGS="--net-http-port 8889"|' /etc/default/dump1090-mutability 2>/dev/null || true
+        $SUDO sed -i 's|LAT=""|LAT="53.4331"|' /etc/default/dump1090-mutability
+        $SUDO sed -i 's|LON=""|LON="-2.1559"|' /etc/default/dump1090-mutability
+        JSON_DIR="/run/dump1090-mutability"
+    fi
 }
 
 install_packages_alpine() {
@@ -119,11 +174,38 @@ install_json_server() {
 install_services_debian() {
     section "Installing systemd services"
 
+    # Determine which dump1090 service to use
+    if systemctl list-unit-files 2>/dev/null | grep -q "dump1090-mutability"; then
+        DUMP1090_SERVICE="dump1090-mutability"
+    elif systemctl list-unit-files 2>/dev/null | grep -q "dump1090-fa"; then
+        DUMP1090_SERVICE="dump1090-fa"
+    else
+        # No package-installed service — create one
+        info "Creating dump1090 systemd service"
+        $SUDO tee /etc/systemd/system/dump1090.service > /dev/null << EOF
+[Unit]
+Description=dump1090 ADS-B receiver
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/dump1090 --net --write-json /run/dump1090 --write-json-every 1 --quiet --lat 53.4331 --lon -2.1559
+Restart=always
+User=$(whoami)
+RuntimeDirectory=dump1090
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        $SUDO systemctl daemon-reload
+        JSON_DIR="/run/dump1090"
+        DUMP1090_SERVICE="dump1090"
+    fi
+
     $SUDO tee /etc/systemd/system/dump1090-json-server.service > /dev/null << EOF
 [Unit]
 Description=dump1090 JSON CORS server
-After=dump1090-mutability.service
-Requires=dump1090-mutability.service
+After=${DUMP1090_SERVICE}.service
+Requires=${DUMP1090_SERVICE}.service
 
 [Service]
 ExecStart=/usr/bin/python3 /usr/local/bin/dump1090-json-server.py
@@ -135,9 +217,9 @@ WantedBy=multi-user.target
 EOF
 
     $SUDO systemctl daemon-reload
-    $SUDO systemctl enable dump1090-mutability
+    $SUDO systemctl enable "$DUMP1090_SERVICE"
     $SUDO systemctl enable dump1090-json-server
-    $SUDO systemctl restart dump1090-mutability
+    $SUDO systemctl restart "$DUMP1090_SERVICE"
     sleep 3
     $SUDO systemctl restart dump1090-json-server
     info "systemd services installed and started"
@@ -191,23 +273,34 @@ EOF
 # ── Install piaware ──────────────────────────────────────────────────────────
 install_piaware_debian() {
     section "Installing piaware (Debian)"
-    # Build dependencies
-    $SUDO $PKG_INSTALL git build-essential debhelper tcl8.6-dev autoconf \
-        python3-dev python3-venv libz-dev openssl \
-        libboost-system-dev libboost-program-options-dev \
-        libboost-regex-dev libboost-filesystem-dev patchelf \
-        tclx tcllib
 
-    if [ ! -d "$HOME/git/piaware_builder" ]; then
-        git clone https://github.com/flightaware/piaware_builder.git "$HOME/git/piaware_builder"
+    $SUDO $PKG_INSTALL git tcl tcl-dev tclx tcllib openssl \
+        libboost-system-dev libboost-program-options-dev \
+        libboost-regex-dev libboost-filesystem-dev \
+        autoconf make g++ coreutils
+
+    # Build tcllauncher
+    if [ ! -d "$HOME/git/tcllauncher" ]; then
+        git clone https://github.com/flightaware/tcllauncher.git "$HOME/git/tcllauncher"
     fi
-    cd "$HOME/git/piaware_builder"
-    chown -R "$(whoami):$(whoami)" .
-    ./sensible-build.sh bookworm
-    cd package-bookworm
-    dpkg-buildpackage -b
-    cd ..
-    $SUDO dpkg -i piaware_*.deb || $SUDO apt-get install -f -y
+    cd "$HOME/git/tcllauncher"
+    autoconf 2>/dev/null || true
+    TCL_LIB=$(find /usr/lib -name tclConfig.sh 2>/dev/null | head -1 | xargs dirname)
+    ./configure --with-tcl="$TCL_LIB"
+    make
+    $SUDO make install
+    cd -
+
+    # Build piaware
+    if [ ! -d "$HOME/git/piaware" ]; then
+        git clone https://github.com/flightaware/piaware.git "$HOME/git/piaware"
+    fi
+    cd "$HOME/git/piaware"
+    TCLSH=$(which tclsh)
+    $SUDO make install TCLSH="$TCLSH"
+    cd -
+
+    info "piaware installed from source"
 }
 
 install_piaware_alpine() {
@@ -337,7 +430,6 @@ main() {
 
     # Update JSON_DIR in python server for debian
     if [ "$OS" = "debian" ]; then
-        $SUDO sed -i "s|/run/dump1090|/run/dump1090-mutability|g" /usr/local/bin/dump1090-json-server.py
         $SUDO sed -i "s|/run/dump1090|/run/dump1090-mutability|g" /etc/systemd/system/dump1090-json-server.service 2>/dev/null || true
     fi
 
