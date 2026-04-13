@@ -49,6 +49,12 @@ Once installed, open your browser at:
 http://localhost:8888/tracker.html
 ```
 
+Or, from another computer on the same network:
+
+```
+http://ip-of-the-adsb-machine:8888/tracker.html
+```
+
 ## Services
 
 ### Debian/Ubuntu
