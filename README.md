@@ -22,6 +22,7 @@ A self-hosted ADS-B flight tracker using an RTL-SDR dongle, dump1090, and a live
 |----|-------------|--------|
 | Pop!_OS / Ubuntu / Debian | systemd | ✓ |
 | Alpine Linux 3.24+ | OpenRC | ✓ |
+| PiOS, debian Trixie  | systemd | ✓ |
 
 ## Installation
 
