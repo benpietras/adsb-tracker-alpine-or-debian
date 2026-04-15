@@ -39,6 +39,9 @@ chmod +x install.sh
 
 # Skip piaware
 ./install.sh --skip-piaware
+
+# Add your coords for accurate position decoding, e.g
+./install --lat 53.123 --lon -2.456
 ```
 
 ## Usage
