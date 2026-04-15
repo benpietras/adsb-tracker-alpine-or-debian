@@ -385,6 +385,8 @@ Usage: $0 [options]
 
 Options:
   --fa-user USERNAME    FlightAware username to configure piaware
+  --lat			Set latitude of receiver
+  --long		Set longitude of receiver
   --skip-piaware        Skip piaware installation
   --skip-blacklist      Skip DVB module blacklisting
   --help                Show this help
@@ -403,6 +405,8 @@ for arg in "$@"; do
     case $arg in
         --fa-user) FA_USER="$2"; shift 2 ;;
         --fa-user=*) FA_USER="${arg#*=}" ;;
+	--lat=*)  LAT="${arg#*=}" ;;
+	--lon=*)  LON="${arg#*=}" ;;
         --skip-piaware) SKIP_PIAWARE=1 ;;
         --skip-blacklist) SKIP_BLACKLIST=1 ;;
         --help) usage ;;
@@ -417,6 +421,16 @@ main() {
 
     detect_os
     check_dongle
+
+    # Get location
+	if [ -z "$LAT" ] || [ -z "$LON" ]; then
+    		printf "\nEnter your location for accurate position decoding:\n"
+    		printf "Latitude (e.g. 53.4331): "
+    		read LAT
+    		printf "Longitude (e.g. -2.1559): "
+    		read LON
+	fi
+    info "Using location: $LAT, $LO"
 
     [ "$SKIP_BLACKLIST" -eq 0 ] && blacklist_dvb
     install_udev_rules
