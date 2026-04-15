@@ -15,6 +15,7 @@ A self-hosted ADS-B flight tracker using an RTL-SDR dongle, dump1090, and a live
 
 - Any RTL2838-based DVB-T USB dongle (e.g. RTL2838UHIDIR)
 - A decent antenna helps — even a quarter-wave ground plane makes a big difference
+- For a pi, I used a 02w - any should be OK
 
 ## Supported Systems
 
